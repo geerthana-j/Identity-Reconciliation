@@ -8,6 +8,7 @@ app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 async function get_result(client,primary_id){
+    
     var return_object = {
         "contact":{
             "primaryContatctId": 0,
@@ -35,6 +36,7 @@ async function get_result(client,primary_id){
             }
         }
         return return_object;
+    
 }
 async function createOrUpdateContact(client, id, email, phoneNumber, linkedId, linkPrecedence, insertOpt) {
     console.log(id, email, phoneNumber, linkedId, linkPrecedence, insertOpt);
@@ -53,53 +55,72 @@ async function createOrUpdateContact(client, id, email, phoneNumber, linkedId, l
 }
 
 app.post('/identify', async function (req, res) {
+    try{
     const phoneNumber = req.body.phoneNumber;
     const email = req.body.email;
+    if(phoneNumber==undefined && email==undefined){
+         res.status(404).send({"Error":"Please provide the required data email and phoneNumber"});
+        return;
+    }
     const conString = "postgres://geeri:8VVmTvxWm1S2KPxEDiNgCMIMmM17jOQk@dpg-cj9s8b9duelc739s97q0-a.singapore-postgres.render.com/masterdb_q9tg?ssl=true"
     const client = new Client(conString);
     await client.connect()
-
+    
     let linkedId =null;
     let linkPrecedence = 'primary';
     let return_object;
     let primary_id;
+    let containsNull=false;
+    if(email ==null || phoneNumber ==null){
+        containsNull=true;
+    }
     var getAllMatchingData = await client.query(`select * from Contact where email = '${email}' or phonenumber = '${phoneNumber}'`);
     console.log(getAllMatchingData);
     allMatchingData=getAllMatchingData.rows;
+    if(containsNull){
+        if(allMatchingData.length!=0){
+        primary_id=allMatchingData[0].linkedid!=null?allMatchingData[0].linkedid:allMatchingData[0].id;
+        return_object = await get_result(client, primary_id);
+         res.status(200).send(return_object);
+        return;
+        }
+        else{
+            res.status(200).send({"Error":"email / phonenumber should not be null insert the data"});
+            return;
+        }
+    }
     if(allMatchingData.length==0){
         console.log('new Insert');
         let new_data = await createOrUpdateContact(client,null,email, phoneNumber,linkedId,linkPrecedence,1);
         console.log(new_data);
         primary_id = new_data.rows[0].id;
         return_object = await get_result(client, primary_id);
-        res.send(return_object);
+         res.status(200).send(return_object);
         return;
     }
-    else{
+    else {
+        
         let exist_email,exist_phonenumber;
         var primaryContacts=[];
         for (let row = 0; row < allMatchingData.length; row++) {
             console.log(allMatchingData[row]);
-         //   console.log(`${allMatchingData[row].email} == ${email} && ${allMatchingData[row].phonenumber} ==${phoneNumber}`); 
             if (allMatchingData[row].email == email){
                  exist_email=1;
-                // primary_id=allMatchingData[row].linkedId?allMatchingData[row].linkedId:allMatchingData[row].id;
              }
              if(allMatchingData[row].phonenumber == phoneNumber){
                   exist_phonenumber=1;
-                //  primary_id=allMatchingData[row].linkedId?allMatchingData[row].linkedId:allMatchingData[row].id;
              }
           
             if (allMatchingData[row].linkprecedence == 'primary') {
                 primary_id=allMatchingData[row].id;
-                primaryContacts.push(allMatchingData[row]); // Change i to row
+                primaryContacts.push(allMatchingData[row]); 
             }
         }
        // console.log("primary id "+primary_id);
         //console.log(exist_email,exist_phonenumber);
         if(exist_email && exist_phonenumber && primaryContacts.length == 1){ 
             return_object=await get_result(client, primary_id); 
-            res.send(return_object);
+             res.status(200).send(return_object);
             return;
         }   
         if(primaryContacts.length == 2 ){
@@ -122,11 +143,16 @@ app.post('/identify', async function (req, res) {
             
             return_object = await get_result(client,primary_id);
         }
-    }   
+    }
     
     await client.end();
-    res.send(return_object);
+     res.status(200).send(return_object);
     return;
+    }
+    catch (error) {
+        console.error("An error occurred:", error);
+        res.status(500).send({ "error": "An internal server error occurred." });
+    }
 });
 app.listen(8884, function () {
     console.log('server started');
