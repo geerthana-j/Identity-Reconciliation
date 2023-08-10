@@ -7,26 +7,25 @@ const app = express();
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
-async function get_restult(client,email,phoneNumber){
+async function get_result(client,primary_id){
     var return_object = {
-		"contact":{
-			"primaryContatctId": 0,
-			"emails": [], 
-			"phoneNumbers": [], 
-			"secondaryContactIds": []
-		}
+        "contact":{
+            "primaryContatctId": 0,
+            "emails": [], 
+            "phoneNumbers": [], 
+            "secondaryContactIds": []
+        }
     };
-    // await client.connect()
-
-    var exists = await client.query(`select * from  Contact where email = '${email}' or phonenumber = '${phoneNumber}'`);
-        // console.log(exists);
+    var exists = await client.query(`select email,phonenumber,linkprecedence,id from  Contact where linkedid=${primary_id} or id=${primary_id}`);
         const exists_rows = exists.rows;
+        console.log("Exists rows: " + exists_rows);
+        // console.log(exists_rows)
         for(let i =0; i< exists_rows.length; i++){
             if(exists_rows[i].linkprecedence == 'primary'){
                 return_object.contact.primaryContatctId = exists_rows[i].id;
             }
             else{
-            return_object.contact.secondaryContactIds.push(exists_rows[i].id);
+                return_object.contact.secondaryContactIds.push(exists_rows[i].id);
             }
             if(return_object.contact.emails.indexOf(exists_rows[i].email)==-1){
                 return_object.contact.emails.push(exists_rows[i].email);
@@ -34,66 +33,101 @@ async function get_restult(client,email,phoneNumber){
             if(return_object.contact.phoneNumbers.indexOf(exists_rows[i].phonenumber)==-1){
                 return_object.contact.phoneNumbers.push(exists_rows[i].phonenumber);
             }
-            
         }
         return return_object;
-
 }
+async function createOrUpdateContact(client, id, email, phoneNumber, linkedId, linkPrecedence, insertOpt) {
+    console.log(id, email, phoneNumber, linkedId, linkPrecedence, insertOpt);
+    
+    if (insertOpt === 1) {
+        return await client.query(`
+            INSERT INTO Contact (phonenumber, email, linkedid, linkprecedence, createdat, updatedat)
+            VALUES ($1, $2, $3, $4, NOW(), NOW()) 
+            RETURNING id`, [phoneNumber, email, linkedId, linkPrecedence]);
+    } else {
+        await client.query(`
+            UPDATE Contact 
+            SET linkprecedence = $1, updatedat = NOW(), linkedid = $2 
+            WHERE id = $3`, [linkPrecedence, linkedId, id]);
+    }
+}
+
 app.post('/identify', async function (req, res) {
-    // console.log(req);
-    let phoneNumber = req.body.phoneNumber;
-    let email = req.body.email;
+    const phoneNumber = req.body.phoneNumber;
+    const email = req.body.email;
+    const conString = "postgres://geeri:8VVmTvxWm1S2KPxEDiNgCMIMmM17jOQk@dpg-cj9s8b9duelc739s97q0-a.singapore-postgres.render.com/masterdb_q9tg?ssl=true"
+    const client = new Client(conString);
+    await client.connect()
+
     let linkedId =null;
     let linkPrecedence = 'primary';
-    // let createdAt = new Date.now();
-    // let updatedAt = new Date.now();
-    let deletedAt = null;
+    let return_object;
+    let primary_id;
+    var getAllMatchingData = await client.query(`select * from Contact where email = '${email}' or phonenumber = '${phoneNumber}'`);
+    console.log(getAllMatchingData);
+    allMatchingData=getAllMatchingData.rows;
+    if(allMatchingData.length==0){
+        console.log('new Insert');
+        let new_data = await createOrUpdateContact(client,null,email, phoneNumber,linkedId,linkPrecedence,1);
+        console.log(new_data);
+        primary_id = new_data.rows[0].id;
+        return_object = await get_result(client, primary_id);
+        res.send(return_object);
+        return;
+    }
+    else{
+        let exist_email,exist_phonenumber;
+        var primaryContacts=[];
+        for (let row = 0; row < allMatchingData.length; row++) {
+            console.log(allMatchingData[row]);
+         //   console.log(`${allMatchingData[row].email} == ${email} && ${allMatchingData[row].phonenumber} ==${phoneNumber}`); 
+            if (allMatchingData[row].email == email){
+                 exist_email=1;
+                // primary_id=allMatchingData[row].linkedId?allMatchingData[row].linkedId:allMatchingData[row].id;
+             }
+             if(allMatchingData[row].phonenumber == phoneNumber){
+                  exist_phonenumber=1;
+                //  primary_id=allMatchingData[row].linkedId?allMatchingData[row].linkedId:allMatchingData[row].id;
+             }
+          
+            if (allMatchingData[row].linkprecedence == 'primary') {
+                primary_id=allMatchingData[row].id;
+                primaryContacts.push(allMatchingData[row]); // Change i to row
+            }
+        }
+       // console.log("primary id "+primary_id);
+        //console.log(exist_email,exist_phonenumber);
+        if(exist_email && exist_phonenumber && primaryContacts.length == 1){ 
+            return_object=await get_result(client, primary_id); 
+            res.send(return_object);
+            return;
+        }   
+        if(primaryContacts.length == 2 ){
+           // console.log('update 2 existing')
+            let date0=primaryContacts[0].createdat;
+            let date1=primaryContacts[1].createdat; 
+            let id_parent = date0 > date1 ? primaryContacts[1].id : primaryContacts[0].id;
+            let id_child = date0 > date1 ? primaryContacts[0].id : primaryContacts[1].id;
+            linkPrecedence = 'secondary';
+            primary_id=id_parent;
+            let updatedData=createOrUpdateContact(client,id_child,email,phoneNumber,id_parent,linkPrecedence,0);
+           // await client.query(`update Contact set linkprecedence = ${linkPrecedence}, updatedat = NOW(), linkedid=${id_parent} where id= ${id_child}`);
+            return_object=await get_result(client,primary_id);
+        }
+        else{
+            linkedId = primaryContacts.length == 1 ?primaryContacts[0].id: allMatchingData[0].linkedid;
+            linkPrecedence = 'secondary';
+            primary_id=linkedId;
+            let new_data =createOrUpdateContact(client,null,email, phoneNumber,linkedId,linkPrecedence,1);
+            
+            return_object = await get_result(client,primary_id);
+        }
+    }   
     
-
-
-    const client = new Client({
-        user: 'odoo',
-        host: 'localhost',
-        database: 'practice',
-        password: '123456',
-        port: 5432,
-    })
-
-    await client.connect()
-    console.log(req.body);
-    var same = await client.query(`select id from  Contact where email = '${email}' and phonenumber = '${phoneNumber}'`);
-    // console.log(same); 
-    if(same == null) {
-        var result = await client.query(`select id from  Contact where email = '${email}' or phonenumber = '${phoneNumber}'`);
-    // console.log(result);
-    if(result != null ) {
-        if(result.rows.length==1){
-        linkedId = result.rows[0].id;
-        linkPrecedence = 'secondary';
-        // console.log(linkedId);
-        console.log(await client.query(`INSERT INTO Contact (phonenumber, email, linkedid, linkprecedence, createdat, updatedat, deletedat)
-        VALUES ('${phoneNumber}', '${email}', ${linkedId}, '${linkPrecedence}', NOW(), NOW(), ${deletedAt})`));
-        // console.log(result);
-        return_object = await get_restult(client,email,phoneNumber)
-    }
-}
-    else{
-        console.log(await client.query(`INSERT INTO Contact (phonenumber, email, linkedid, linkprecedence, createdat, updatedat, deletedat)
-        VALUES ('${phoneNumber}', '${email}', ${linkedId}, '${linkPrecedence}', NOW(), NOW(), ${deletedAt})`));
-        return_object = await get_restult(client,email,phoneNumber)
-    }
-    }
-    else{
-        return_object = await get_restult(client,email,phoneNumber)
-        console.log(return_object);
-    }
-
-    await client.end()
-    res.send(return_object)
+    await client.end();
+    res.send(return_object);
+    return;
 });
 app.listen(8884, function () {
     console.log('server started');
 });
-// CREATE DATABASE Contact
-// 5432
-// http://localhost:8888/identify
