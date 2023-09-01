@@ -6,9 +6,7 @@ const { Client } = require('pg');
 const app = express();
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
-
 async function get_result(client,primary_id){
-    
     var return_object = {
         "contact":{
             "primaryContatctId": 0,
@@ -53,7 +51,6 @@ async function createOrUpdateContact(client, id, email, phoneNumber, linkedId, l
             WHERE id = $3`, [linkPrecedence, linkedId, id]);
     }
 }
-
 app.post('/identify', async function (req, res) {
     try{
     const phoneNumber = req.body.phoneNumber;
@@ -116,7 +113,6 @@ app.post('/identify', async function (req, res) {
                 primaryContacts.push(allMatchingData[row]); 
             }
         }
-       // console.log("primary id "+primary_id);
         //console.log(exist_email,exist_phonenumber);
         if(exist_email && exist_phonenumber && primaryContacts.length == 1){ 
             return_object=await get_result(client, primary_id); 
