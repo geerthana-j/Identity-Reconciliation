@@ -19,8 +19,8 @@ async function get_result(client,primary_id){
     };
     var exists = await client.query(`select email,phonenumber,linkprecedence,id from  Contact where linkedid=${primary_id} or id=${primary_id}`);
         const exists_rows = exists.rows;
-        console.log("Exists rows: " + exists_rows);
-        // console.log(exists_rows)
+        console.log("Exists rows: " );
+            console.log(exists_rows);
         for(let i =0; i< exists_rows.length; i++){
             if(exists_rows[i].linkprecedence == 'primary'){
                 return_object.contact.primaryContatctId = exists_rows[i].id;
