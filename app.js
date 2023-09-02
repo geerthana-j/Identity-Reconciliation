@@ -6,7 +6,9 @@ const { Client } = require('pg');
 const app = express();
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+
 async function get_result(client,primary_id){
+
     var return_object = {
         "contact":{
             "primaryContatctId": 0,
@@ -17,8 +19,8 @@ async function get_result(client,primary_id){
     };
     var exists = await client.query(`select email,phonenumber,linkprecedence,id from  Contact where linkedid=${primary_id} or id=${primary_id}`);
         const exists_rows = exists.rows;
-        console.log("Exists rows: " );
-            console.log(exists_rows);
+        console.log("Exists rows: " + exists_rows);
+        // console.log(exists_rows)
         for(let i =0; i< exists_rows.length; i++){
             if(exists_rows[i].linkprecedence == 'primary'){
                 return_object.contact.primaryContatctId = exists_rows[i].id;
@@ -44,21 +46,29 @@ async function createOrUpdateContact(client, id, email, phoneNumber, linkedId, l
             INSERT INTO Contact (phonenumber, email, linkedid, linkprecedence, createdat, updatedat)
             VALUES ($1, $2, $3, $4, NOW(), NOW()) 
             RETURNING id`, [phoneNumber, email, linkedId, linkPrecedence]);
-    } else {
+    } 
+    else {
         await client.query(`
             UPDATE Contact 
             SET linkprecedence = $1, updatedat = NOW(), linkedid = $2 
             WHERE id = $3`, [linkPrecedence, linkedId, id]);
     }
 }
+
 app.post('/identify', async function (req, res) {
     try{
-    const phoneNumber = req.body.phoneNumber;
+    // getting data from request body
+    const phoneNumber = req.body.phoneNumber;  
     const email = req.body.email;
+
+    // if email or phone number is not provided.
+
     if(phoneNumber==undefined && email==undefined){
          res.status(404).send({"Error":"Please provide the required data email and phoneNumber"});
         return;
     }
+
+    // 
     const conString = "postgres://geeri:8VVmTvxWm1S2KPxEDiNgCMIMmM17jOQk@dpg-cj9s8b9duelc739s97q0-a.singapore-postgres.render.com/masterdb_q9tg?ssl=true"
     const client = new Client(conString);
     await client.connect()
@@ -72,8 +82,10 @@ app.post('/identify', async function (req, res) {
         containsNull=true;
     }
     var getAllMatchingData = await client.query(`select * from Contact where email = '${email}' or phonenumber = '${phoneNumber}'`);
-    console.log(getAllMatchingData);
+    //console.log(getAllMatchingData);
     allMatchingData=getAllMatchingData.rows;
+    console.log('All Matching Data: ');
+    console.log(allMatchingData);
     if(containsNull){
         if(allMatchingData.length!=0){
         primary_id=allMatchingData[0].linkedid!=null?allMatchingData[0].linkedid:allMatchingData[0].id;
@@ -96,7 +108,6 @@ app.post('/identify', async function (req, res) {
         return;
     }
     else {
-        
         let exist_email,exist_phonenumber;
         var primaryContacts=[];
         for (let row = 0; row < allMatchingData.length; row++) {
@@ -107,42 +118,52 @@ app.post('/identify', async function (req, res) {
              if(allMatchingData[row].phonenumber == phoneNumber){
                   exist_phonenumber=1;
              }
-          
             if (allMatchingData[row].linkprecedence == 'primary') {
-                primary_id=allMatchingData[row].id;
+                primary_id=allMatchingData[row].id; // if only one record is present 
                 primaryContacts.push(allMatchingData[row]); 
+            }  
+        }
+        console.log("primary id "+primary_id);
+        console.log(exist_email,exist_phonenumber);
+        if(exist_email && exist_phonenumber){  
+            if(primaryContacts.length == 2 ){ 
+                // if a email is present in one record and phonenumber is present in another record
+                console.log('update 2 existing')
+                let date0=primaryContacts[0].createdat;
+                let date1=primaryContacts[1].createdat; 
+                let id_parent = date0 > date1 ? primaryContacts[1].id : primaryContacts[0].id;
+                let id_child = date0 > date1 ? primaryContacts[0].id : primaryContacts[1].id;
+                linkPrecedence = 'secondary';
+                primary_id=id_parent;
+                let updatedData=createOrUpdateContact(client,id_child,email,phoneNumber,id_parent,linkPrecedence,0);
+            // await client.query(`update Contact set linkprecedence = ${linkPrecedence}, updatedat = NOW(), linkedid=${id_parent} where id= ${id_child}`);
+                return_object=await get_result(client,primary_id);
+            }
+            else if (primaryContacts.length ==1){ 
+                // single record retrival
+                return_object=await get_result(client, primary_id); 
+                res.status(200).send(return_object);
+                return;
+            }
+            else{
+                primary_id = allMatchingData[0].linkedid;
+                return_object=await get_result(client, primary_id); 
+                res.status(200).send(return_object);
+                return;
             }
         }
-        //console.log(exist_email,exist_phonenumber);
-        if(exist_email && exist_phonenumber && primaryContacts.length == 1){ 
-            return_object=await get_result(client, primary_id); 
-             res.status(200).send(return_object);
-            return;
-        }   
-        if(primaryContacts.length == 2 ){
-           // console.log('update 2 existing')
-            let date0=primaryContacts[0].createdat;
-            let date1=primaryContacts[1].createdat; 
-            let id_parent = date0 > date1 ? primaryContacts[1].id : primaryContacts[0].id;
-            let id_child = date0 > date1 ? primaryContacts[0].id : primaryContacts[1].id;
-            linkPrecedence = 'secondary';
-            primary_id=id_parent;
-            let updatedData=createOrUpdateContact(client,id_child,email,phoneNumber,id_parent,linkPrecedence,0);
-           // await client.query(`update Contact set linkprecedence = ${linkPrecedence}, updatedat = NOW(), linkedid=${id_parent} where id= ${id_child}`);
-            return_object=await get_result(client,primary_id);
-        }
         else{
+            // any one is present and we are inserting a new record and updating the new one as secondary
             linkedId = primaryContacts.length == 1 ?primaryContacts[0].id: allMatchingData[0].linkedid;
             linkPrecedence = 'secondary';
             primary_id=linkedId;
             let new_data =createOrUpdateContact(client,null,email, phoneNumber,linkedId,linkPrecedence,1);
-            
             return_object = await get_result(client,primary_id);
         }
     }
     
     await client.end();
-     res.status(200).send(return_object);
+    res.status(200).send(return_object);
     return;
     }
     catch (error) {
@@ -150,6 +171,6 @@ app.post('/identify', async function (req, res) {
         res.status(500).send({ "error": "An internal server error occurred." });
     }
 });
-app.listen(8884, function () {
+app.listen(8885, function () {
     console.log('server started');
 });
